@@ -3,7 +3,7 @@
   "name": "Ragdoll",
   "author": "999dulgi",
   "description": "Enemies fly away with ragdoll-like effect on death",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "has_pck": false,
   "has_dll": true,
   "affects_gameplay": false

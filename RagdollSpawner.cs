@@ -44,8 +44,8 @@ public static class RagdollSpawner
         var partParent = CombatContainer ?? creature.GetTree().CurrentScene;
         var fallbackPos = visuals.GlobalPosition;
 
-        var visualsBounds = visuals.Bounds;
-        float floorY = visuals.GlobalPosition.Y + visualsBounds.Size.Y * 0.5f;
+        var boundsNode = visuals.Bounds;
+        float floorY = boundsNode.GlobalPosition.Y + boundsNode.Size.Y;
 
         var bonePositions = GetBonePositions(body, visuals.Scale, visuals.GlobalPosition);
 
@@ -131,7 +131,7 @@ public static class RagdollSpawner
         return result;
     }
 
-    private static readonly Vector2 Gravity = new Vector2(0, 2500f);
+    private static Vector2 Gravity => new Vector2(0, RagdollSettings.Current.Gravity);
     private const float BounceDamp = 0.65f;
     private const float Friction = 0.90f;
     private const float StopVelThreshold = 30f;
@@ -143,6 +143,7 @@ public static class RagdollSpawner
 
         var atlasTexture = new AtlasTexture();
         atlasTexture.Atlas = texture;
+        atlasTexture.FilterClip = true;
 
         var bounds = region.Bounds;
         atlasTexture.Region = new Rect2(bounds.Position.X, bounds.Position.Y, bounds.Size.X, bounds.Size.Y);
@@ -157,10 +158,12 @@ public static class RagdollSpawner
         parent.AddChild(node);
         node.GlobalPosition = spawnPos;
 
-        float angle = (float)(_rng.NextDouble() * Mathf.Pi - Mathf.Pi * 0.85f);
-        float speed = (float)(_rng.NextDouble() * 900 + 1500);
+        var s = RagdollSettings.Current;
+        float spread = s.AngleSpreadDeg * Mathf.Pi / 180f;
+        float angle = (float)(_rng.NextDouble() * spread - spread * 0.85f);
+        float speed = (float)(_rng.NextDouble() * s.Speed * 0.6f + s.Speed);
         var velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * speed;
-        float angVel = (float)(_rng.NextDouble() * 30 - 15);
+        float angVel = (float)(_rng.NextDouble() * s.AngularSpeed * 2 - s.AngularSpeed);
 
         Simulate(node, sprite, velocity, angVel, floorY);
     }

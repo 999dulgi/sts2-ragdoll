@@ -1,0 +1,55 @@
+#nullable enable
+using System.IO;
+using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Godot;
+
+public static class RagdollSettings
+{
+    private static readonly string ConfigPath = Path.ChangeExtension(
+        Assembly.GetExecutingAssembly().Location, ".cfg");
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+    };
+
+    public sealed class Data
+    {
+        public float Gravity { get; set; } = 2500f;
+        public float Speed { get; set; } = 1500f;
+        public float AngleSpreadDeg { get; set; } = 180f;
+        public float AngularSpeed { get; set; } = 15f;
+    }
+
+    public static Data Current { get; private set; } = new();
+
+    public static void Load()
+    {
+        try
+        {
+            if (!File.Exists(ConfigPath)) return;
+            var json = File.ReadAllText(ConfigPath);
+            Current = JsonSerializer.Deserialize<Data>(json, JsonOptions) ?? new();
+        }
+        catch (System.Exception e)
+        {
+            GD.PrintErr($"[Ragdoll] Failed to load config: {e.Message}");
+        }
+    }
+
+    public static void Save()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(Current, JsonOptions);
+            File.WriteAllText(ConfigPath, json);
+        }
+        catch (System.Exception e)
+        {
+            GD.PrintErr($"[Ragdoll] Failed to save config: {e.Message}");
+        }
+    }
+}
