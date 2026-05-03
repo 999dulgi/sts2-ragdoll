@@ -21,7 +21,7 @@ public static class RagdollSettings
         public float Gravity { get; set; } = 2500f;
         public float Speed { get; set; } = 1500f;
         public float AngleSpreadDeg { get; set; } = 180f;
-        public float AngularSpeed { get; set; } = 15f;
+        public float AngularSpeed { get; set; } = 120f;
     }
 
     public static Data Current { get; private set; } = new();

@@ -5,10 +5,9 @@ using System.Text.Json;
 using Godot;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 
-public static class RagdollSpawner
+public static class RagdollExplosion
 {
     private static readonly Random _rng = new Random();
-    public static Node? CombatContainer;
 
     public static void Spawn(NCreature creature)
     {
@@ -37,25 +36,33 @@ public static class RagdollSpawner
         var texture = texturesArray[0].As<Texture2D>();
         if (texture == null) return;
 
-        var (_, _, regions) = SpineAtlasParser.Parse(atlasText);
+        var (_, _, allRegions) = SpineAtlasParser.Parse(atlasText);
+        var regionMap = new Dictionary<string, AtlasRegion>();
+        foreach (var r in allRegions) regionMap.TryAdd(r.Name, r);
 
         var visuals = creature.Visuals;
         float partScale = visuals.Scale.X;
-        var partParent = CombatContainer ?? creature.GetTree().CurrentScene;
+        var customConfig = RagdollConfigs.Get(creature.Entity.ModelId.Entry);
+        var partParent = RagdollPatch.CombatContainer ?? creature.GetTree().CurrentScene;
         var fallbackPos = visuals.GlobalPosition;
 
         var boundsNode = visuals.Bounds;
         float floorY = boundsNode.GlobalPosition.Y + boundsNode.Size.Y;
 
-        var bonePositions = GetBonePositions(body, visuals.Scale, visuals.GlobalPosition);
-
+        var (boneTransforms, _, _) =
+            RagdollPreloader.Pop(creature) ?? RagdollPreloader.GetBoneInfo(body);
         const int minSize = 20;
-        foreach (var region in regions)
-        {
-            if (region.Bounds.Size.X < minSize || region.Bounds.Size.Y < minSize) continue;
 
-            var startPos = bonePositions.TryGetValue(region.Name, out var bonePos) ? bonePos : fallbackPos;
-            SpawnPart(partParent, texture, region, startPos, partScale, floorY);
+        foreach (var attachName in boneTransforms.Keys)
+        {
+            if (!regionMap.TryGetValue(attachName, out var region)) continue;
+            if (region.Bounds.Size.X < minSize || region.Bounds.Size.Y < minSize) continue;
+            if (customConfig != null && customConfig.ExcludedRegions.Contains(attachName)) continue;
+
+            var startPos = boneTransforms.TryGetValue(region.Name, out var bt) ? bt.Origin : fallbackPos;
+            var effect = customConfig?.Effects.GetValueOrDefault(region.Name);
+            var finishEffect = customConfig?.FinishEffects.GetValueOrDefault(region.Name);
+            SpawnPart(partParent, texture, region, startPos, partScale, floorY, effect, finishEffect);
         }
     }
 
@@ -93,84 +100,47 @@ public static class RagdollSpawner
         return null;
     }
 
-    private static Dictionary<string, Vector2> GetBonePositions(Node2D body, Vector2 nodeScale, Vector2 nodeGlobalPos)
-    {
-        var result = new Dictionary<string, Vector2>();
-        try
-        {
-            var skeleton = body.Call("get_skeleton").AsGodotObject();
-            if (skeleton == null) return result;
-
-            var slots = skeleton.Call("get_slots").AsGodotArray();
-            foreach (var slotVar in slots)
-            {
-                var slot = slotVar.AsGodotObject();
-                if (slot == null) continue;
-
-                var attachment = slot.Call("get_attachment").AsGodotObject();
-                if (attachment == null) continue;
-
-                var attachName = attachment.Call("get_name").AsString();
-                if (string.IsNullOrEmpty(attachName)) continue;
-
-                var bone = slot.Call("get_bone").AsGodotObject();
-                if (bone == null) continue;
-
-                float wx = bone.Call("get_world_x").AsSingle();
-                float wy = bone.Call("get_world_y").AsSingle();
-
-                // Spine Y-up → Godot Y-down, Visuals.Scale 반영
-                var localPos = new Vector2(wx, -wy) * nodeScale;
-                result[attachName] = nodeGlobalPos + localPos;
-            }
-        }
-        catch (Exception e)
-        {
-            GD.PrintErr($"[Ragdoll] GetBonePositions error: {e.Message}");
-        }
-        return result;
-    }
-
     private static Vector2 Gravity => new Vector2(0, RagdollSettings.Current.Gravity);
-    private const float BounceDamp = 0.65f;
-    private const float Friction = 0.90f;
+    private const float AirDamp          = 0.985f;
+    private const float BounceDamp       = 0.65f;
+    private const float Friction         = 0.90f;
     private const float StopVelThreshold = 30f;
 
-    private static void SpawnPart(Node parent, Texture2D texture, AtlasRegion region, Vector2 spawnPos, float scale, float floorY)
+    private static void SpawnPart(Node parent, Texture2D texture, AtlasRegion region, Vector2 spawnPos, float scale, float floorY, Action<Node2D, Sprite2D>? effect = null, Action<Node2D, Sprite2D>? finishEffect = null)
     {
         var node = new Node2D();
         node.ProcessMode = Node.ProcessModeEnum.Always;
 
-        var atlasTexture = new AtlasTexture();
-        atlasTexture.Atlas = texture;
-        atlasTexture.FilterClip = true;
-
+        var atlasTexture = new AtlasTexture { Atlas = texture, FilterClip = true };
         var bounds = region.Bounds;
-        atlasTexture.Region = new Rect2(bounds.Position.X, bounds.Position.Y, bounds.Size.X, bounds.Size.Y);
+        var sprite = new Sprite2D { Texture = atlasTexture, Scale = Vector2.One * scale };
 
-        var sprite = new Sprite2D();
-        sprite.Texture = atlasTexture;
-        sprite.Scale = Vector2.One * scale;
         if (region.Rotated)
+        {
             sprite.Rotation = -Mathf.Pi / 2f;
+            atlasTexture.Region = new Rect2(bounds.Position.X, bounds.Position.Y, bounds.Size.Y, bounds.Size.X);
+        }
+        else
+        {
+            atlasTexture.Region = new Rect2(bounds.Position.X, bounds.Position.Y, bounds.Size.X, bounds.Size.Y);
+        }
 
         node.AddChild(sprite);
         parent.AddChild(node);
         node.GlobalPosition = spawnPos;
+        effect?.Invoke(node, sprite);
 
         var s = RagdollSettings.Current;
         float spread = s.AngleSpreadDeg * Mathf.Pi / 180f;
-        float angle = (float)(_rng.NextDouble() * spread - spread * 0.85f);
-        float speed = (float)(_rng.NextDouble() * s.Speed * 0.6f + s.Speed);
+        float angle  = (float)(_rng.NextDouble() * spread - spread * 0.85f);
+        float speed  = (float)(_rng.NextDouble() * s.Speed * 0.6f + s.Speed);
         var velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * speed;
         float angVel = (float)(_rng.NextDouble() * s.AngularSpeed * 2 - s.AngularSpeed);
 
-        Simulate(node, sprite, velocity, angVel, floorY);
+        Simulate(node, sprite, velocity, angVel, floorY, finishEffect);
     }
 
-    private const float AirDamp = 0.985f;
-
-    private static async void Simulate(Node2D node, Sprite2D sprite, Vector2 velocity, float angVel, float floorY)
+    private static async void Simulate(Node2D node, Sprite2D sprite, Vector2 velocity, float angVel, float floorY, Action<Node2D, Sprite2D>? onFinish = null)
     {
         ulong lastTick = Time.GetTicksUsec();
 
@@ -185,31 +155,31 @@ public static class RagdollSpawner
 
             velocity += Gravity * delta;
             velocity *= Mathf.Pow(AirDamp, delta * 60f);
-            angVel *= Mathf.Pow(AirDamp, delta * 60f);
+            angVel   *= Mathf.Pow(AirDamp, delta * 60f);
 
             var newPos = node.GlobalPosition + velocity * delta;
 
             if (newPos.Y >= floorY && velocity.Y > 0f)
             {
-                newPos.Y = floorY;
-                velocity.Y = -velocity.Y * BounceDamp;
+                newPos.Y    = floorY;
+                velocity.Y  = -velocity.Y * BounceDamp;
                 velocity.X *= Friction;
-                angVel *= 0.5f;
-
-                if (Mathf.Abs(velocity.Y) < StopVelThreshold)
-                    velocity.Y = 0f;
+                angVel     *= 0.5f;
+                if (Mathf.Abs(velocity.Y) < StopVelThreshold) velocity.Y = 0f;
             }
 
             node.GlobalPosition = newPos;
-            sprite.Rotation += angVel * delta;
+            sprite.Rotation    += angVel * delta;
 
-            if (velocity.LengthSquared() < 100f && Mathf.Abs(angVel) < 0.1f)
-                break;
+            if (velocity.LengthSquared() < 100f && Mathf.Abs(angVel) < 0.1f) break;
         }
 
         if (!GodotObject.IsInstanceValid(node)) return;
+
+        onFinish?.Invoke(node, sprite);
+
         var tween = node.CreateTween().SetPauseMode(Tween.TweenPauseMode.Process);
-        tween.TweenProperty(sprite, "modulate:a", 0f, 0.4f);
+        tween.TweenProperty(sprite, "modulate:a", 0f, 0.3f);
         tween.TweenCallback(Callable.From(() =>
         {
             if (GodotObject.IsInstanceValid(node)) node.QueueFree();

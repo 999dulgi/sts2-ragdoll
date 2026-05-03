@@ -31,7 +31,7 @@ public static class CombatContainerPatch
 {
     public static void Postfix(NCombatSceneContainer __instance)
     {
-        RagdollSpawner.CombatContainer = __instance;
+        RagdollPatch.CombatContainer = __instance;
     }
 }
 
@@ -57,18 +57,47 @@ public static class ModInfoFillPatch
 [HarmonyPatch(typeof(NCreature), nameof(NCreature.StartDeathAnim))]
 public static class RagdollPatch
 {
+    public static Node? CombatContainer;
+    public static void Prefix(NCreature __instance)
+    {
+        if (__instance.Entity.IsPlayer) return;
+        // Explode 모드는 사망 전 뼈 위치 캡처 필요
+        var customConfig = RagdollConfigs.Get(__instance.Entity.ModelId.Entry);
+        if (customConfig?.RagdollMode == RagdollMode.Explode)
+            RagdollPreloader.CaptureNow(__instance);
+    }
+
     public static void Postfix(NCreature __instance)
     {
-        // 플레이어는 제외
         if (__instance.Entity.IsPlayer) return;
 
-        RagdollSpawner.Spawn(__instance);
+        var customConfig = RagdollConfigs.Get(__instance.Entity.ModelId.Entry);
+        if (customConfig?.RagdollMode == RagdollMode.Explode)
+        {
+            __instance.Body.Visible = false;
+            RagdollExplosion.Spawn(__instance);
+            return;
+        }
 
-        // 파츠가 날아가는 동안 원본 Body 페이드아웃
+        // Ragdoll 모드: Spine skeleton 복사본으로 래그돌 시뮬레이션
         var body = __instance.Body;
-        var tween = body.CreateTween().SetPauseMode(Tween.TweenPauseMode.Process);
-        tween.TweenProperty(body, "modulate:a", 0f, 0.2f);
-        tween.TweenCallback(Callable.From(() => body.Visible = false));
+        var skelDataRes = body.Get("skeleton_data_res");
+        if (skelDataRes.VariantType == Variant.Type.Nil) return;
+
+        body.Visible = false;
+
+        var ragdollNode = (Node2D)ClassDB.Instantiate(body.GetClass());
+        ragdollNode.Set("skeleton_data_res", skelDataRes);
+        ragdollNode.Scale = body.Scale;
+        ragdollNode.ZIndex = body.ZIndex;
+        ragdollNode.ProcessMode = Node.ProcessModeEnum.Always;
+
+        var partParent = (Node?)CombatContainer ?? body.GetTree().CurrentScene;
+        partParent.AddChild(ragdollNode);
+        ragdollNode.GlobalPosition = body.GlobalPosition;
+
+        float floorY = __instance.Visuals.Bounds.GlobalPosition.Y + __instance.Visuals.Bounds.Size.Y;
+        SpineRagdoll.Start(ragdollNode, floorY);
     }
 }
 
@@ -84,3 +113,4 @@ public static class RevivePatch
         body.Modulate = Colors.White;
     }
 }
+
