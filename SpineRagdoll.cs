@@ -6,29 +6,28 @@ using System.Linq;
 
 public static class SpineRagdoll
 {
-    private const float AirDamp    = 0.99f;
-    private const float BounceDamp = 0.4f;
-    private const float Friction   = 0.85f;
-    private const float BodyDamp   = 0.972f;
-    private const float WobbleDamp = 0.88f;
-    private const float SpringK    = 3f;
+    private const float AirDamp         = 0.99f;
+    private const float BounceDamp      = 0.4f;
+    private const float Friction        = 0.85f;
+    private const float BodyDamp        = 0.972f;
+    private const float WobbleDamp      = 0.88f;
+    private const float SpringK         = 3f;
     private const float MaxTime    = 2f;
     private const float StopVelSq  = 1f;
     private const float StopAngDeg = 0.5f;
 
-    public static async void Start(Node2D body, float floorY)
+    public static async void Start(Node2D body, float floorY, int overDamage = 0, GodotObject? skin = null)
     {
         var s   = RagdollSettings.Current;
         var rng = new Random();
 
         var mainPos  = body.GlobalPosition;
-        var dir      = new Vector2((float)(rng.NextDouble() * 2 - 1), -1f).Normalized();
-        float speed  = (float)(rng.NextDouble() * s.Speed * 0.6f + s.Speed);
+        float rawX   = (float)(rng.NextDouble() * 2 - 1);
+        float clampedX = rawX >= 0 ? Mathf.Max(rawX, 0.4f) : Mathf.Min(rawX, -0.4f);
+        var dir      = new Vector2(clampedX, -1f).Normalized();
+        float speed  = (float)(rng.NextDouble() * s.RagdollSpeed * 0.6f + s.RagdollSpeed + overDamage * 30f);
         var mainPrev = mainPos - dir * speed * 0.016f;
-        var gravity  = new Vector2(0, s.Gravity);
-
-        float initSpin = (float)(rng.NextDouble() * s.AngularSpeed * 6f - s.AngularSpeed * 3f);
-        initSpin += dir.X * s.AngularSpeed * 2f;
+        var gravity  = s.ZeroGravity ? Vector2.Zero : new Vector2(0, s.RagdollGravity);
 
         var tree = body.GetTree();
 
@@ -40,6 +39,12 @@ public static class SpineRagdoll
 
         var skeleton = body.Call("get_skeleton").AsGodotObject();
         if (skeleton == null) return;
+
+        if (skin != null && GodotObject.IsInstanceValid(skin))
+        {
+            skeleton.Call("set_skin", skin);
+            skeleton.Call("set_slots_to_setup_pose");
+        }
 
         var boneObjects = new Dictionary<string, GodotObject>();
         foreach (var v in skeleton.Call("get_bones").AsGodotArray())
@@ -64,9 +69,6 @@ public static class SpineRagdoll
             if (!string.IsNullOrEmpty(parentName)) boneParents[name] = parentName;
         }
 
-        var animState = body.Call("get_animation_state").AsGodotObject();
-        try { animState?.Call("set_animation", "idle_loop", true, 0); } catch { }
-
         var rootBoneName = boneObjects.Keys.FirstOrDefault(n => !boneParents.ContainsKey(n));
         var rootBone     = rootBoneName != null ? boneObjects[rootBoneName] : null;
 
@@ -84,28 +86,29 @@ public static class SpineRagdoll
             boneDepth[name] = depth;
         }
 
-        // 팔다리 wobble 초기값 (루트 뼈 제외)
         var wobbleRot = new Dictionary<string, float>();
         var wobbleVel = new Dictionary<string, float>();
         foreach (var (name, _) in boneObjects)
         {
             if (name == rootBoneName) continue;
-            int depth = boneDepth.GetValueOrDefault(name, 1);
-            float df  = Mathf.Clamp(0.3f + depth / 3f, 0.3f, 2f);
-            wobbleRot[name] = -dir.X * 8f * df;
-            wobbleVel[name] = (float)(rng.NextDouble() * s.AngularSpeed * 2f - s.AngularSpeed * 1f) * df;
+            wobbleRot[name] = dir.X * 10f;
+            wobbleVel[name] = dir.X * s.RagdollAngularSpeed * 1.5f
+                            + (float)(rng.NextDouble() * s.RagdollAngularSpeed * 0.4f - s.RagdollAngularSpeed * 0.2f);
         }
 
-        float bodyAngle  = 0f;
-        float bodyAngVel = initSpin;
+        float bodyAngVel = dir.X * s.RagdollAngularSpeed * 3f
+                         + (float)(rng.NextDouble() * s.RagdollAngularSpeed * 0.4f - s.RagdollAngularSpeed * 0.2f);
         var prevVelVec = mainPos - mainPrev;
 
-        // 애니메이션 기준 회전값 저장 — 매 프레임 절대값으로 덮어씌우기 위해
         var baseRot = new Dictionary<string, float>();
         foreach (var (name, bone) in boneObjects)
             baseRot[name] = (float)bone.Call("get_rotation").AsDouble();
 
-        bool inHandler = false;
+        var animState = body.Call("get_animation_state").AsGodotObject();
+        try { animState?.Call("set_animation", "idle_loop", true, 0); } catch { }
+
+        float bodyAngle  = 0f;
+        bool  inHandler  = false;
         Callable handler = Callable.From((GodotObject _) =>
         {
             if (!GodotObject.IsInstanceValid(body) || inHandler) return;
@@ -127,9 +130,10 @@ public static class SpineRagdoll
         });
         body.Connect("before_world_transforms_change", handler);
 
-        ulong lastTick = Time.GetTicksUsec();
-        float elapsed  = 0f;
-        bool  onFloor  = false;
+        var   screenRect = body.GetViewportRect();
+        ulong lastTick   = Time.GetTicksUsec();
+        float elapsed    = 0f;
+        bool  onFloor    = false;
 
         while (elapsed < MaxTime && GodotObject.IsInstanceValid(body))
         {
@@ -142,14 +146,15 @@ public static class SpineRagdoll
             elapsed  += dt;
 
             // Verlet 위치
-            var vel  = (mainPos - mainPrev) * AirDamp;
+            float airDamp = s.ZeroGravity ? 0.998f : AirDamp;
+            var vel  = (mainPos - mainPrev) * airDamp;
             mainPrev = mainPos;
             mainPos += vel + gravity * dt * dt;
 
             var accel = vel - prevVelVec;
             prevVelVec = vel;
 
-            // 텀블링: 이번 프레임 델타만
+            // 텀블링
             bodyAngVel *= Mathf.Pow(BodyDamp, dt * 60f);
             bodyAngle   = bodyAngVel * dt * 60f;
 
@@ -162,10 +167,29 @@ public static class SpineRagdoll
                 mainPos.Y  = floorY;
                 mainPrev.Y = floorY + vy * BounceDamp;
                 mainPrev.X = mainPos.X - vx * Friction;
-                bodyAngVel *= 0.4f;
-                if (!onFloor) { justLanded = true; onFloor = true; }
+                if (!onFloor) { justLanded = true; onFloor = true; bodyAngVel *= 0.4f; }
             }
             else { onFloor = false; }
+
+            if (onFloor) bodyAngVel *= Mathf.Pow(0.80f, dt * 60f);
+
+            // 좌우 벽 충돌
+            if (mainPos.X < screenRect.Position.X || mainPos.X > screenRect.End.X)
+            {
+                float vx   = mainPos.X - mainPrev.X;
+                mainPos.X  = Mathf.Clamp(mainPos.X, screenRect.Position.X, screenRect.End.X);
+                mainPrev.X = mainPos.X + vx * BounceDamp;
+                bodyAngVel = -bodyAngVel * BounceDamp;
+            }
+
+            // 천장 충돌 (무중력 시 위로 빠져나가는 것 방지)
+            if (s.ZeroGravity && mainPos.Y < screenRect.Position.Y)
+            {
+                float vy   = mainPos.Y - mainPrev.Y;
+                mainPos.Y  = screenRect.Position.Y;
+                mainPrev.Y = mainPos.Y + vy * BounceDamp;
+                bodyAngVel = -bodyAngVel * BounceDamp;
+            }
 
             // 팔다리 물리
             foreach (var name in wobbleVel.Keys.ToArray())
@@ -177,16 +201,33 @@ public static class SpineRagdoll
                 wobbleVel[name] -= accel.Y * df * 0.5f;
 
                 if (justLanded)
-                    wobbleVel[name] += (float)(rng.NextDouble() * s.AngularSpeed * 80f - s.AngularSpeed * 40f) * df;
+                    wobbleVel[name] += (float)(rng.NextDouble() * s.RagdollAngularSpeed * 80f - s.RagdollAngularSpeed * 40f) * df;
 
                 wobbleVel[name] -= wobbleRot[name] * SpringK * df * dt;
                 wobbleVel[name] *= Mathf.Pow(WobbleDamp, dt * 60f);
+
                 wobbleRot[name] += wobbleVel[name] * dt;
+                wobbleRot[name] = Math.Clamp(wobbleRot[name], -120f, 120f);
             }
 
+            // Godot 트랜스폼으로 위치 이동
             body.GlobalPosition = mainPos;
+            // update_skeleton이 before_world_transforms_change 시그널 발생 → handler에서 뼈 회전 주입
             body.Call("update_skeleton", (double)dt);
 
+            // 정지 조건
+            bool canStop = onFloor || s.ZeroGravity;
+            if (canStop)
+            {
+                var curVel = mainPos - mainPrev;
+                if (curVel.LengthSquared() < StopVelSq && Mathf.Abs(bodyAngVel) < StopAngDeg)
+                {
+                    bool limbsStopped = true;
+                    foreach (var name in wobbleVel.Keys)
+                        if (Mathf.Abs(wobbleVel[name]) >= StopAngDeg) { limbsStopped = false; break; }
+                    if (limbsStopped) break;
+                }
+            }
         }
 
         if (!GodotObject.IsInstanceValid(body)) return;
