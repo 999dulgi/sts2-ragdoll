@@ -1,7 +1,10 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Godot;
+
+using Vector2 = Godot.Vector2;
 
 public enum RagdollMode
 {
@@ -15,13 +18,15 @@ public static class RagdollConfigs
     {
         public RagdollMode RagdollMode { get; } = RagdollMode.Ragdoll;
         public HashSet<string> ExcludedRegions { get; }
+        public Dictionary<string, (Vector2 position, Vector2 size)[]> SeparateRegions { get; }
         public Dictionary<string, Action<Node2D, Sprite2D>> Effects { get; }
         public Dictionary<string, Action<Node2D, Sprite2D>> FinishEffects { get; }
 
-        public Config(RagdollMode ragdollMode = RagdollMode.Ragdoll, string[]? exclude = null, Dictionary<string, Action<Node2D, Sprite2D>>? effects = null, Dictionary<string, Action<Node2D, Sprite2D>>? finishEffects = null)
+        public Config(RagdollMode ragdollMode = RagdollMode.Ragdoll, string[]? exclude = null, Dictionary<string, (Vector2 position, Vector2 size)[]>? separateRegions = null, Dictionary<string, Action<Node2D, Sprite2D>>? effects = null, Dictionary<string, Action<Node2D, Sprite2D>>? finishEffects = null)
         {
             RagdollMode = ragdollMode;
             ExcludedRegions = exclude != null ? new HashSet<string>(exclude) : new();
+            SeparateRegions = separateRegions ?? new();
             Effects = effects ?? new();
             FinishEffects = finishEffects ?? new();
         }
@@ -135,22 +140,32 @@ public static class RagdollConfigs
         ),
         ["CUBEX_CONSTRUCT"] = new Config(
             ragdollMode: RagdollMode.Explode,
-            exclude: new[] { "shadow", "top light", "bottom light", "base_light", "orb_glow", "orb glow 1", "orb glow 2", "orb glow 3", "orb_glow_shapes", "crack",
-            "moss3/top", "moss3/bottom", "moss2/top", "moss2/bottom" },
+            exclude: new[] { "shadow", "top light", "bottom light", "base_light", "orb_glow", "orb glow 1", "orb glow 2", "orb glow 3", "orb_glow_shapes", "crack" },
             finishEffects: new Dictionary<string, Action<Node2D, Sprite2D>>
             {
                 ["orb"] = (node, sprite) =>
                 {
-                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/vfx_hyperbeam_impact.tscn"); 
-                    if (scene == null) { GD.PrintErr("[Ragdoll] vfx_hyperbeam_impact.tscn not found"); return; }
-                    try
+                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/block_spark_vfx.tscn");
+                    if (scene == null) { GD.PrintErr("[Ragdoll] block_spark_vfx.tscn not found"); return; }
+
+                    var vfxRoot = scene.Instantiate<Node2D>();
+                    var container = new Node2D();
+                    node.GetTree().CurrentScene.AddChild(container);
+                    container.GlobalPosition = node.GlobalPosition;
+
+                    GpuParticles2D? lastParticle = null;
+                    foreach (var child in vfxRoot.GetChildren())
                     {
-                        var vfx = scene.Instantiate<Node2D>();
-                        var root = node.GetTree().CurrentScene;
-                        root.AddChild(vfx);
-                        vfx.GlobalPosition = node.GlobalPosition;
+                        if (child is not GpuParticles2D gpu) continue;
+                        vfxRoot.RemoveChild(gpu);
+                        container.AddChild(gpu);
+                        gpu.Restart();
+                        lastParticle = gpu;
                     }
-                    catch (Exception e) { GD.PrintErr($"[Ragdoll] vfx error: {e.Message}"); }
+                    vfxRoot.QueueFree();
+
+                    if (lastParticle != null)
+                        CleanupAfterParticles(container, lastParticle);
                 }
             }
         ),
@@ -161,13 +176,16 @@ public static class RagdollConfigs
             exclude: new[] { "shadow", "slash", "drip_vfx_1", "drip_vfx_2", "drop_vfx", "dead_body", "dead_body_skin_1", "dead_butt" }
         ),
         ["DECIMILLIPEDE_SEGMENT_FRONT"] = new Config(
-            exclude: new[] { "shadow", "shell", "shell glow", "shell crack", "shell crack glow" }
+            exclude: new[] { "shadow", "segment_1_fx", "seg_2_fx_top", "seg_2_fx_bottom", "segment_3_fx", "holes_l", "holes_r", 
+            "segment 1 shriveled", "segment 2 shriveled", "segment 3 shriveled", "wormy_bottom_mid", "wormy_top_mid", "segment 3" }
         ),
         ["DECIMILLIPEDE_SEGMENT_MIDDLE"] = new Config(
-            exclude: new[] { "shadow", "shell", "shell glow", "shell crack", "shell crack glow" }
+            exclude: new[] { "shadow", "segment_1_fx", "seg_2_fx_top", "seg_2_fx_bottom", "segment_3_fx", "holes_l", "holes_r", 
+            "segment 1 shriveled", "segment 2 shriveled", "segment 3 shriveled", "segment 1", "segment 3" }
         ),
         ["DECIMILLIPEDE_SEGMENT_BACK"] = new Config(
-            exclude: new[] { "shadow", "shell", "shell glow", "shell crack", "shell crack glow" }
+            exclude: new[] { "shadow", "segment_1_fx", "seg_2_fx_top", "seg_2_fx_bottom", "segment_3_fx", "holes_l", "holes_r", 
+            "segment 1 shriveled", "segment 2 shriveled", "segment 3 shriveled", "segement 1", "wormy_top_mid", "wormy_bottom_mid" }
         ),
         ["DEVOTED_SCULPTOR"] = new Config(
             exclude: new[] { "shadow", "hood feathers 1", "hood feathers 2", "hood feathers 3"} //이름이 feather이거나 wing이면 천천히 떨어지게 만들기
@@ -215,16 +233,27 @@ public static class RagdollConfigs
             {
                 ["orb"] = (node, sprite) =>
                 {
-                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/vfx_hyperbeam_impact.tscn");
-                    if (scene == null) { GD.PrintErr("[Ragdoll] vfx_hyperbeam_impact.tscn not found"); return; }
-                    try
+                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/block_spark_vfx.tscn");
+                    if (scene == null) { GD.PrintErr("[Ragdoll] block_spark_vfx.tscn not found"); return; }
+
+                    var vfxRoot = scene.Instantiate<Node2D>();
+                    var container = new Node2D();
+                    node.GetTree().CurrentScene.AddChild(container);
+                    container.GlobalPosition = node.GlobalPosition;
+
+                    GpuParticles2D? lastParticle = null;
+                    foreach (var child in vfxRoot.GetChildren())
                     {
-                        var vfx = scene.Instantiate<Node2D>();
-                        var root = node.GetTree().CurrentScene;
-                        root.AddChild(vfx);
-                        vfx.GlobalPosition = node.GlobalPosition;
+                        if (child is not GpuParticles2D gpu) continue;
+                        vfxRoot.RemoveChild(gpu);
+                        container.AddChild(gpu);
+                        gpu.Restart();
+                        lastParticle = gpu;
                     }
-                    catch (Exception e) { GD.PrintErr($"[Ragdoll] vfx error: {e.Message}"); }
+                    vfxRoot.QueueFree();
+
+                    if (lastParticle != null)
+                        CleanupAfterParticles(container, lastParticle);
                 }
             }
         ),
@@ -240,9 +269,6 @@ public static class RagdollConfigs
         ),
         ["HUNTER_KILLER"] = new Config(
             exclude: new[] { "shadow", "tail_shading" }
-        ),
-        ["HAUNTED_SHIP"] = new Config(
-            exclude: new[] { "shadow", "attack_swish", "attack_triple_swish" }
         ),
         ["INFESTED_PRISM"] = new Config(
             exclude: new[] { "shadow", "flash_out", "glow_body", "arm1_glow", "arm2_glow", "arm3_glow", "hit_swish", "shine1", "shine2", "shine3" }
@@ -276,6 +302,21 @@ public static class RagdollConfigs
             "explosion/explode0011", "explosion/explode0012", "explosion/explode0013", "Layer 179"}
         ),
         ["LIVING_FOG"] = new Config(
+            effects: new Dictionary<string, Action<Node2D, Sprite2D>>
+            {
+                ["head_base"] = (node, sprite) =>
+                {
+                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/rest_smoke_vfx.tscn");
+                    if (scene == null) { GD.PrintErr("[Ragdoll] rest_smoke_vfx.tscn not found"); return; }
+
+                    try {
+                        var vfx = scene.Instantiate<Node2D>();
+                        var root = node.GetTree().CurrentScene;
+                        root.AddChild(vfx);
+                    } 
+                    catch (Exception e) { GD.PrintErr($"[Ragdoll] vfx error: {e.Message}"); }
+                }
+            },
             exclude: new[] { "shadow", "zap1-1", "zap1-2", "zap1-3", "zap1-4", "zap1-5", "zap 2-1", "zap 2-2", "zap 2-3", "zap 2-4", "zap 2-5" }
         ),
         ["LOUSE_PROGENITOR"] = new Config(
@@ -295,16 +336,27 @@ public static class RagdollConfigs
             {
                 ["orb"] = (node, sprite) =>
                 {
-                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/vfx_hyperbeam_impact.tscn"); 
-                    if (scene == null) { GD.PrintErr("[Ragdoll] vfx_hyperbeam_impact.tscn not found"); return; }
-                    try
+                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/block_spark_vfx.tscn");
+                    if (scene == null) { GD.PrintErr("[Ragdoll] block_spark_vfx.tscn not found"); return; }
+
+                    var vfxRoot = scene.Instantiate<Node2D>();
+                    var container = new Node2D();
+                    node.GetTree().CurrentScene.AddChild(container);
+                    container.GlobalPosition = node.GlobalPosition;
+
+                    GpuParticles2D? lastParticle = null;
+                    foreach (var child in vfxRoot.GetChildren())
                     {
-                        var vfx = scene.Instantiate<Node2D>();
-                        var root = node.GetTree().CurrentScene;
-                        root.AddChild(vfx);
-                        vfx.GlobalPosition = node.GlobalPosition;
+                        if (child is not GpuParticles2D gpu) continue;
+                        vfxRoot.RemoveChild(gpu);
+                        container.AddChild(gpu);
+                        gpu.Restart();
+                        lastParticle = gpu;
                     }
-                    catch (Exception e) { GD.PrintErr($"[Ragdoll] vfx error: {e.Message}"); }
+                    vfxRoot.QueueFree();
+
+                    if (lastParticle != null)
+                        CleanupAfterParticles(container, lastParticle);
                 }
             }
         ),
@@ -330,6 +382,18 @@ public static class RagdollConfigs
             exclude: new[] { "shadow", "body_blurred", "wing_top_blurred", "wing_bottom_blurred", "head_blurred" }
         ),
         ["PHANTASMAL_GARDENER"] = new Config(
+            separateRegions: new Dictionary<string, (Vector2 position, Vector2 size)[]>
+            {
+                ["neck"] = new[]
+                {
+                    (new Vector2(0, 0), new Vector2(83, 63)),
+                    (new Vector2(83, 0), new Vector2(83, 63)),
+                    (new Vector2(166, 0), new Vector2(83, 63)),
+                    (new Vector2(249, 0), new Vector2(83, 63)),
+                    (new Vector2(332, 0), new Vector2(83, 63)),
+                    (new Vector2(415, 0), new Vector2(83, 63)),
+                }
+            },
             exclude: new[] { "shadow", "hole_bottom", "hole_top", "striker thing" }
         ),
         ["PHROG_PARASITE"] = new Config(
@@ -342,16 +406,27 @@ public static class RagdollConfigs
             {
                 ["head_orb"] = (node, sprite) =>
                 {
-                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/vfx_hyperbeam_impact.tscn");
-                    if (scene == null) { GD.PrintErr("[Ragdoll] vfx_hyperbeam_impact.tscn not found"); return; }
-                    try
+                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/block_spark_vfx.tscn");
+                    if (scene == null) { GD.PrintErr("[Ragdoll] block_spark_vfx.tscn not found"); return; }
+
+                    var vfxRoot = scene.Instantiate<Node2D>();
+                    var container = new Node2D();
+                    node.GetTree().CurrentScene.AddChild(container);
+                    container.GlobalPosition = node.GlobalPosition;
+
+                    GpuParticles2D? lastParticle = null;
+                    foreach (var child in vfxRoot.GetChildren())
                     {
-                        var vfx = scene.Instantiate<Node2D>();
-                        var root = node.GetTree().CurrentScene;
-                        root.AddChild(vfx);
-                        vfx.GlobalPosition = node.GlobalPosition;
+                        if (child is not GpuParticles2D gpu) continue;
+                        vfxRoot.RemoveChild(gpu);
+                        container.AddChild(gpu);
+                        gpu.Restart();
+                        lastParticle = gpu;
                     }
-                    catch (Exception e) { GD.PrintErr($"[Ragdoll] vfx error: {e.Message}"); }
+                    vfxRoot.QueueFree();
+
+                    if (lastParticle != null)
+                        CleanupAfterParticles(container, lastParticle);
                 }
             }
         ),
@@ -386,23 +461,7 @@ public static class RagdollConfigs
             exclude: new[] { "shadow", "curled/smear 2", "curled/smear", "curled/smear 3", "slumberng_dirt" }
         ),
         ["SNAPPING_JAXFRUIT"] = new Config(
-            exclude: new[] { "shadow", "purple sac", "purple_sac_brightness", "add glows", "orb_shine_1", "orb_shine_2" },
-            finishEffects: new Dictionary<string, Action<Node2D, Sprite2D>>
-            {
-                ["purple_sac"] = (node, sprite) =>
-                {
-                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/vfx_hyperbeam_impact.tscn");
-                    if (scene == null) { GD.PrintErr("[Ragdoll] vfx_hyperbeam_impact.tscn not found"); return; }
-                    try
-                    {
-                        var vfx = scene.Instantiate<Node2D>();
-                        var root = node.GetTree().CurrentScene;
-                        root.AddChild(vfx);
-                        vfx.GlobalPosition = node.GlobalPosition;
-                    }
-                    catch (Exception e) { GD.PrintErr($"[Ragdoll] vfx error: {e.Message}"); }
-                }
-            }
+            exclude: new[] { "shadow", "purple sac", "purple_sac_brightness", "add glows", "orb_shine_1", "orb_shine_2" }
         ),
         ["SNEAKY_GREMLIN"] = new Config(
             exclude: new[] { "shadow" }
@@ -469,16 +528,27 @@ public static class RagdollConfigs
             {
                 ["orb"] = (node, sprite) =>
                 {
-                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/vfx_hyperbeam_impact.tscn");
-                    if (scene == null) { GD.PrintErr("[Ragdoll] vfx_hyperbeam_impact.tscn not found"); return; }
-                    try
+                    var scene = ResourceLoader.Load<PackedScene>("res://scenes/vfx/block_spark_vfx.tscn");
+                    if (scene == null) { GD.PrintErr("[Ragdoll] block_spark_vfx.tscn not found"); return; }
+
+                    var vfxRoot = scene.Instantiate<Node2D>();
+                    var container = new Node2D();
+                    node.GetTree().CurrentScene.AddChild(container);
+                    container.GlobalPosition = node.GlobalPosition;
+
+                    GpuParticles2D? lastParticle = null;
+                    foreach (var child in vfxRoot.GetChildren())
                     {
-                        var vfx = scene.Instantiate<Node2D>();
-                        var root = node.GetTree().CurrentScene;
-                        root.AddChild(vfx);
-                        vfx.GlobalPosition = node.GlobalPosition;
+                        if (child is not GpuParticles2D gpu) continue;
+                        vfxRoot.RemoveChild(gpu);
+                        container.AddChild(gpu);
+                        gpu.Restart();
+                        lastParticle = gpu;
                     }
-                    catch (Exception e) { GD.PrintErr($"[Ragdoll] vfx error: {e.Message}"); }
+                    vfxRoot.QueueFree();
+
+                    if (lastParticle != null)
+                        CleanupAfterParticles(container, lastParticle);
                 }
             }
         ),
@@ -521,5 +591,12 @@ public static class RagdollConfigs
         if (monsterId == null) return null;
         _configs.TryGetValue(monsterId, out var config);
         return config;
+    }
+
+    private static async void CleanupAfterParticles(Node container, GpuParticles2D last)
+    {
+        await container.ToSignal(last, GpuParticles2D.SignalName.Finished);
+        if (GodotObject.IsInstanceValid(container))
+            container.QueueFree();
     }
 }

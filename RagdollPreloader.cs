@@ -61,8 +61,8 @@ public static class RagdollPreloader
                 var bone = slot.Call("get_bone").AsGodotObject();
                 if (bone == null) continue;
 
-                var attachName = slotData.Call("get_attachment_name").AsString();
                 var slotName   = slotData.Call("get_name").AsString();
+                var attachName = slotData.Call("get_attachment_name").AsString();
                 var key = string.IsNullOrEmpty(attachName) ? slotName : attachName;
                 if (string.IsNullOrEmpty(key)) continue;
                 if (!string.IsNullOrEmpty(attachName)) attachmentKeys.Add(key);

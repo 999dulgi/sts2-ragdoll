@@ -1,4 +1,6 @@
 #nullable enable
+using System;
+using System.Dynamic;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
@@ -18,10 +20,19 @@ public static class RagdollSettings
 
     public sealed class Data
     {
-        public float Gravity { get; set; } = 2500f;
-        public float Speed { get; set; } = 1500f;
-        public float AngleSpreadDeg { get; set; } = 180f;
-        public float AngularSpeed { get; set; } = 120f;
+        public float ExplodeGravity { get; set; } = 2500f;
+        public float ExplodeSpeed { get; set; } = 1100f;
+        public float ExplodeAngleDirectionDeg { get; set; } = 270f;
+        public float ExplodeAngleSpreadDeg { get; set; } = 60f;
+        public float ExplodeAngularSpeed { get; set; } = 40f;
+        public float RagdollGravity { get; set; } = 2500f;
+        public float RagdollSpeed { get; set; } = 600f;
+        public float RagdollAngleDirectionDeg { get; set; } = 45f;
+        public float RagdollAngleSpreadDeg { get; set; } = 20f;
+        public float RagdollAngularSpeed { get; set; } = -10f;
+        public Boolean ZeroGravity { get; set; } = false;
+        public Boolean ForcedExplosionMode { get; set; } = false;
+        public Boolean OverkillForce { get; set; } = false;
     }
 
     public static Data Current { get; private set; } = new();

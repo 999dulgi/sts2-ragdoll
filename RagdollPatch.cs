@@ -1,10 +1,19 @@
 #nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Commands;
+using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Screens.ModdingScreen;
+using MegaCrit.Sts2.Core.GameActions.Multiplayer;
+using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.ValueProps;
 
 [ModInitializer("ModInit")]
 public static class ModStart
@@ -58,24 +67,42 @@ public static class ModInfoFillPatch
 public static class RagdollPatch
 {
     public static Node? CombatContainer;
+
+    private static readonly Dictionary<ulong, string> _animNameCache = [];
+
     public static void Prefix(NCreature __instance)
     {
         if (__instance.Entity.IsPlayer) return;
-        // Explode 모드는 사망 전 뼈 위치 캡처 필요
         var customConfig = RagdollConfigs.Get(__instance.Entity.ModelId.Entry);
         if (customConfig?.RagdollMode == RagdollMode.Explode)
             RagdollPreloader.CaptureNow(__instance);
+
+        try
+        {
+            var animState = __instance.Body?.Call("get_animation_state").AsGodotObject();
+            var trackEntry = animState?.Call("get_current", 0).AsGodotObject();
+            var animName = trackEntry?.Call("get_animation").AsGodotObject()?.Call("get_name").AsString();
+            if (!string.IsNullOrEmpty(animName))
+                _animNameCache[__instance.GetInstanceId()] = animName;
+        }
+        catch { }
     }
 
     public static void Postfix(NCreature __instance)
     {
         if (__instance.Entity.IsPlayer) return;
+        var id = __instance.Entity.ModelId.Entry;
+        var customConfig = RagdollConfigs.Get(id);
+        int overDamage = 0;
+        if (RagdollSettings.Current.OverkillForce && OverkillPatch.overkillDict.TryGetValue(id, out var dmg))
+            overDamage = dmg;
 
-        var customConfig = RagdollConfigs.Get(__instance.Entity.ModelId.Entry);
-        if (customConfig?.RagdollMode == RagdollMode.Explode)
+        if (RagdollSettings.Current.ForcedExplosionMode || customConfig?.RagdollMode == RagdollMode.Explode)
         {
             __instance.Body.Visible = false;
             RagdollExplosion.Spawn(__instance);
+            OverkillPatch.overkillDict.Remove(id);
+            _animNameCache.Remove(__instance.GetInstanceId());
             return;
         }
 
@@ -83,6 +110,12 @@ public static class RagdollPatch
         var body = __instance.Body;
         var skelDataRes = body.Get("skeleton_data_res");
         if (skelDataRes.VariantType == Variant.Type.Nil) return;
+
+        var origSkeleton = body.Call("get_skeleton").AsGodotObject();
+        var origSkin = origSkeleton?.Call("get_skin").AsGodotObject();
+
+        _animNameCache.TryGetValue(__instance.GetInstanceId(), out var currentAnimName);
+        _animNameCache.Remove(__instance.GetInstanceId());
 
         body.Visible = false;
 
@@ -97,7 +130,8 @@ public static class RagdollPatch
         ragdollNode.GlobalPosition = body.GlobalPosition;
 
         float floorY = __instance.Visuals.Bounds.GlobalPosition.Y + __instance.Visuals.Bounds.Size.Y;
-        SpineRagdoll.Start(ragdollNode, floorY);
+        SpineRagdoll.Start(ragdollNode, floorY, overDamage, origSkin, currentAnimName);
+        OverkillPatch.overkillDict.Remove(id);
     }
 }
 
@@ -111,6 +145,32 @@ public static class RevivePatch
         var body = __instance.Body;
         body.Visible = true;
         body.Modulate = Colors.White;
+    }
+}
+
+[HarmonyPatch(typeof(CreatureCmd), nameof(CreatureCmd.Damage),
+    new Type[] { typeof(PlayerChoiceContext), typeof(IEnumerable<Creature>), typeof(decimal), typeof(ValueProp), typeof(Creature), typeof(CardModel) })]
+public static class OverkillPatch
+{
+    public static Dictionary<string, int> overkillDict = new Dictionary<string, int>();
+    public static void Postfix(Task<IEnumerable<DamageResult>> __result)
+    {
+        if (__result == null) return;
+
+        __result.ContinueWith(t =>
+        {
+            if (t.IsFaulted || t.IsCanceled) return;
+            foreach (var result in t.Result)
+            {
+                if (result.WasTargetKilled && result.OverkillDamage > 0)
+                {
+                    Creature target = result.Receiver;
+                    if (target == null || target.IsPlayer) continue;
+                    overkillDict[target.ModelId.Entry] = Math.Clamp(result.OverkillDamage, 0, 300);
+                    GD.Print($"{target.ModelId.Entry} : {result.OverkillDamage}");
+                }
+            }
+        });
     }
 }
 

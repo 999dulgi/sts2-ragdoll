@@ -1,15 +1,17 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using Godot;
+using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 
 public static class RagdollExplosion
 {
     private static readonly Random _rng = new Random();
 
-    public static void Spawn(NCreature creature)
+    public static void Spawn(NCreature creature, int overDamage = 0)
     {
         if (!creature.HasSpineAnimation) return;
 
@@ -53,16 +55,94 @@ public static class RagdollExplosion
             RagdollPreloader.Pop(creature) ?? RagdollPreloader.GetBoneInfo(body);
         const int minSize = 20;
 
+
+        // named skin 기반 fallback 매핑: boneTransform key → atlas region
+        // custom-skin이 override한 slot의 경우 default key가 atlas에 없을 수 있음
+        var skeleton = body.Call("get_skeleton").AsGodotObject();
+        var skelData2 = skeleton?.Call("get_data").AsGodotObject();
+        var allDataSkins2 = skelData2?.Call("get_skins").AsGodotArray();
+        // slotIdx → slotName
+        var slotIdxToName = new Dictionary<int, string>();
+        var slots2 = skeleton?.Call("get_slots").AsGodotArray();
+        if (slots2 != null)
+        {
+            for (int i = 0; i < slots2.Count; i++)
+            {
+                var sd = slots2[i].AsGodotObject()?.Call("get_data").AsGodotObject();
+                if (sd != null) slotIdxToName[i] = sd.Call("get_name").AsString();
+            }
+        }
+        // named skin entry key → atlas region (skinName prefix 매칭)
+        var fallbackRegionMap = new Dictionary<string, string>();
+        if (allDataSkins2 != null)
+        {
+            foreach (var sv in allDataSkins2)
+            {
+                var s = sv.AsGodotObject(); if (s == null) continue;
+                var sName = s.Call("get_name").AsString();
+                if (sName == "default") continue;
+                foreach (var ev in s.Call("get_attachments").AsGodotArray())
+                {
+                    var entry = ev.AsGodotObject(); if (entry == null) continue;
+                    var slotIdx = entry.Call("get_slot_index").AsInt32();
+                    var key = entry.Call("get_name").AsString();
+                    if (fallbackRegionMap.ContainsKey(key)) continue;
+                    if (!slotIdxToName.TryGetValue(slotIdx, out var slotName)) continue;
+                    // skinName + "/" + slotName 패턴으로 atlas region 탐색
+                    var candidate = regionMap.Keys.FirstOrDefault(r =>
+                        r.StartsWith(sName + "/", StringComparison.OrdinalIgnoreCase) &&
+                        r.EndsWith(slotName, StringComparison.OrdinalIgnoreCase));
+                    if (candidate != null)
+                        fallbackRegionMap[key] = candidate;
+                }
+            }
+        }
+
         foreach (var attachName in boneTransforms.Keys)
         {
-            if (!regionMap.TryGetValue(attachName, out var region)) continue;
-            if (region.Bounds.Size.X < minSize || region.Bounds.Size.Y < minSize) continue;
+            if (!regionMap.TryGetValue(attachName, out var region))
+            {
+                if (!fallbackRegionMap.TryGetValue(attachName, out var fallbackName)) continue;
+                if (!regionMap.TryGetValue(fallbackName, out region)) continue;
+            }
+            bool inSeparate = customConfig?.SeparateRegions.ContainsKey(attachName) == true;
+            if (!inSeparate && (region.Bounds.Size.X < minSize || region.Bounds.Size.Y < minSize)) continue;
             if (customConfig != null && customConfig.ExcludedRegions.Contains(attachName)) continue;
 
-            var startPos = boneTransforms.TryGetValue(region.Name, out var bt) ? bt.Origin : fallbackPos;
             var effect = customConfig?.Effects.GetValueOrDefault(region.Name);
             var finishEffect = customConfig?.FinishEffects.GetValueOrDefault(region.Name);
-            SpawnPart(partParent, texture, region, startPos, partScale, floorY, effect, finishEffect);
+
+            if (customConfig?.SeparateRegions.TryGetValue(attachName, out var subRects) == true
+                && subRects != null && subRects.Length > 0)
+            {
+                float logicalW = region.Rotated ? region.Bounds.Size.Y : region.Bounds.Size.X;
+                float logicalH = region.Rotated ? region.Bounds.Size.X : region.Bounds.Size.Y;
+                var fullLogicalCenter = new Vector2(logicalW / 2f, logicalH / 2f);
+
+                foreach (var (pos, size) in subRects)
+                {
+                    if (!inSeparate && (size.X < minSize || size.Y < minSize)) continue;
+
+                    Rect2 subAtlasRect;
+                    subAtlasRect = new Rect2(
+                            region.Bounds.Position.X + pos.X,
+                            region.Bounds.Position.Y + pos.Y,
+                            size.X, size.Y);
+
+                    var subLogicalCenter = new Vector2(pos.X + size.X / 2f, pos.Y + size.Y / 2f);
+                    var logicalOffset = subLogicalCenter - fullLogicalCenter;
+                    var spawnOffset = (region.Rotated
+                        ? new Vector2(logicalOffset.Y, -logicalOffset.X)
+                        : logicalOffset) * partScale;
+                    
+                    // 파편별로도 약간의 속도 변동을 줄 수 있음
+                    SpawnPart(partParent, texture, region, fallbackPos + spawnOffset, partScale, floorY, overDamage, subAtlasRect, effect, finishEffect);
+                }
+            }
+            else
+            {
+                SpawnPart(partParent, texture, region, fallbackPos, partScale, floorY, overDamage, null, effect, finishEffect);
+            }
         }
     }
 
@@ -100,42 +180,53 @@ public static class RagdollExplosion
         return null;
     }
 
-    private static Vector2 Gravity => new Vector2(0, RagdollSettings.Current.Gravity);
-    private const float AirDamp          = 0.985f;
-    private const float BounceDamp       = 0.65f;
-    private const float Friction         = 0.90f;
+    private static Vector2 Gravity => RagdollSettings.Current.ZeroGravity ? Vector2.Zero : new Vector2(0, RagdollSettings.Current.ExplodeGravity);
+    private const float AirDamp          = 0.99f;
+    private const float BounceDamp       = 0.4f;
+    private const float Friction         = 0.85f;
     private const float StopVelThreshold = 30f;
 
-    private static void SpawnPart(Node parent, Texture2D texture, AtlasRegion region, Vector2 spawnPos, float scale, float floorY, Action<Node2D, Sprite2D>? effect = null, Action<Node2D, Sprite2D>? finishEffect = null)
+    private static void SpawnPart(Node parent, Texture2D texture, AtlasRegion region, Vector2 spawnPos, float scale, float floorY, int overDamage, Rect2? subAtlasRect = null, Action<Node2D, Sprite2D>? effect = null, Action<Node2D, Sprite2D>? finishEffect = null)
     {
         var node = new Node2D();
         node.ProcessMode = Node.ProcessModeEnum.Always;
 
         var atlasTexture = new AtlasTexture { Atlas = texture, FilterClip = true };
-        var bounds = region.Bounds;
         var sprite = new Sprite2D { Texture = atlasTexture, Scale = Vector2.One * scale };
 
-        if (region.Rotated)
+        if (subAtlasRect.HasValue)
+        {
+            atlasTexture.Region = subAtlasRect.Value;
+            if (region.Rotated)
+                sprite.Rotation = -Mathf.Pi / 2f;
+        }
+        else if (region.Rotated)
         {
             sprite.Rotation = -Mathf.Pi / 2f;
-            atlasTexture.Region = new Rect2(bounds.Position.X, bounds.Position.Y, bounds.Size.Y, bounds.Size.X);
+            var b = region.Bounds;
+            atlasTexture.Region = new Rect2(b.Position.X, b.Position.Y, b.Size.Y, b.Size.X);
         }
         else
         {
-            atlasTexture.Region = new Rect2(bounds.Position.X, bounds.Position.Y, bounds.Size.X, bounds.Size.Y);
+            var b = region.Bounds;
+            atlasTexture.Region = new Rect2(b.Position.X, b.Position.Y, b.Size.X, b.Size.Y);
         }
 
         node.AddChild(sprite);
+
         parent.AddChild(node);
         node.GlobalPosition = spawnPos;
         effect?.Invoke(node, sprite);
 
         var s = RagdollSettings.Current;
-        float spread = s.AngleSpreadDeg * Mathf.Pi / 180f;
-        float angle  = (float)(_rng.NextDouble() * spread - spread * 0.85f);
-        float speed  = (float)(_rng.NextDouble() * s.Speed * 0.6f + s.Speed);
-        var velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * speed;
-        float angVel = (float)(_rng.NextDouble() * s.AngularSpeed * 2 - s.AngularSpeed);
+        
+        // 전달받은 속도가 있으면 해당 값을 기준으로 ±20% 무작위성 적용, 없으면 기존 방식 유지
+
+        float angle  = Mathf.DegToRad(s.ExplodeAngleDirectionDeg + (float)(_rng.NextDouble() * s.ExplodeAngleSpreadDeg - s.ExplodeAngleSpreadDeg / 2f));
+        float speed  = (float)(_rng.NextDouble() * s.ExplodeSpeed * 0.6f + s.ExplodeSpeed + overDamage * 30f);
+        Vector2 velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * speed;
+        float angVel = (float)(_rng.NextDouble() * s.ExplodeAngularSpeed * 2 - s.ExplodeAngularSpeed);
+
 
         Simulate(node, sprite, velocity, angVel, floorY, finishEffect);
     }
@@ -143,8 +234,10 @@ public static class RagdollExplosion
     private static async void Simulate(Node2D node, Sprite2D sprite, Vector2 velocity, float angVel, float floorY, Action<Node2D, Sprite2D>? onFinish = null)
     {
         ulong lastTick = Time.GetTicksUsec();
+        ulong startTick = lastTick;
+        var screenRect = node.GetViewportRect();
 
-        while (GodotObject.IsInstanceValid(node))
+        while (GodotObject.IsInstanceValid(node) && (Time.GetTicksUsec() - startTick) < 10_000_000ul)
         {
             await node.ToSignal(node.GetTree(), SceneTree.SignalName.ProcessFrame);
             if (!GodotObject.IsInstanceValid(node)) return;
@@ -166,6 +259,15 @@ public static class RagdollExplosion
                 velocity.X *= Friction;
                 angVel     *= 0.5f;
                 if (Mathf.Abs(velocity.Y) < StopVelThreshold) velocity.Y = 0f;
+            }
+
+            if (newPos.X <= screenRect.Position.X || newPos.X > screenRect.End.X)
+                velocity.X = -velocity.X * BounceDamp;
+
+            if (RagdollSettings.Current.ZeroGravity && newPos.Y < screenRect.Position.Y)
+            {
+                newPos.Y   = screenRect.Position.Y;
+                velocity.Y = -velocity.Y * BounceDamp;
             }
 
             node.GlobalPosition = newPos;
