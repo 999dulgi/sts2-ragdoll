@@ -72,6 +72,17 @@ public static class SpineRagdoll
         var rootBoneName = boneObjects.Keys.FirstOrDefault(n => !boneParents.ContainsKey(n));
         var rootBone     = rootBoneName != null ? boneObjects[rootBoneName] : null;
 
+        // clipping attachment 슬롯을 null로 설정해 마스크 비활성화
+        foreach (var v in skeleton.Call("get_slots").AsGodotArray())
+        {
+            var slot       = v.AsGodotObject(); if (slot == null) continue;
+            var attachment = slot.Call("get_attachment").AsGodotObject(); if (attachment == null) continue;
+            var attachName = attachment.Call("get_attachment_name").AsString();
+            if (!attachName.Contains("mask", StringComparison.OrdinalIgnoreCase) &&
+                !attachName.Contains("clip", StringComparison.OrdinalIgnoreCase)) continue;
+            slot.Call("set_attachment", new Variant());
+        }
+
         // 뼈 계층 깊이 계산
         var boneDepth = new Dictionary<string, int>();
         foreach (var name in boneObjects.Keys)
@@ -100,12 +111,23 @@ public static class SpineRagdoll
                          + (float)(rng.NextDouble() * s.RagdollAngularSpeed * 0.4f - s.RagdollAngularSpeed * 0.2f);
         var prevVelVec = mainPos - mainPrev;
 
+        var animState = body.Call("get_animation_state").AsGodotObject();
+        try { animState?.Call("set_animation", "idle_loop", true, 0); } catch { }
+
+        // idle_loop 포즈를 skeleton에 반영한 뒤 baseRot 캡처
+        body.Call("update_skeleton", 0.0);
+
         var baseRot = new Dictionary<string, float>();
         foreach (var (name, bone) in boneObjects)
             baseRot[name] = (float)bone.Call("get_rotation").AsDouble();
 
-        var animState = body.Call("get_animation_state").AsGodotObject();
-        try { animState?.Call("set_animation", "idle_loop", true, 0); } catch { }
+        foreach (var v in skeleton.Call("get_path_constraints").AsGodotArray())
+        {
+            var pc = v.AsGodotObject(); if (pc == null) continue;
+            pc.Call("set_mix_rotate", 0.0);
+            pc.Call("set_mix_x", 0.0);
+            pc.Call("set_mix_y", 0.0);
+        }
 
         float bodyAngle  = 0f;
         bool  inHandler  = false;
@@ -129,6 +151,77 @@ public static class SpineRagdoll
             inHandler = false;
         });
         body.Connect("before_world_transforms_change", handler);
+
+        void UpdateDebugDraw(BoneDebugDraw dd)
+        {
+            dd.Lines.Clear();
+            dd.Dots.Clear();
+            var xform = body.GlobalTransform;
+            foreach (var (name, bone) in boneObjects)
+            {
+                var wx  = (float)bone.Call("get_world_x").AsDouble();
+                var wy  = (float)bone.Call("get_world_y").AsDouble();
+                var pos = xform * new Vector2(wx, wy);
+                dd.Dots.Add((pos, name));
+                if (boneParents.TryGetValue(name, out var pName) && boneObjects.TryGetValue(pName, out var pBone))
+                {
+                    var pPos = xform * new Vector2(
+                        (float)pBone.Call("get_world_x").AsDouble(),
+                        (float)pBone.Call("get_world_y").AsDouble());
+                    dd.Lines.Add((pPos, pos));
+                }
+            }
+            dd.QueueRedraw();
+        }
+
+        if (s.FreeMode)
+        {
+            var viewport    = body.GetViewport();
+            bool  dragging  = false;
+            Vector2 dragOff = Vector2.Zero;
+            float freeAngle = 0f;
+
+            var debugDraw = new BoneDebugDraw();
+            debugDraw.ZIndex = 200;
+            body.GetParent().AddChild(debugDraw);
+
+            while (GodotObject.IsInstanceValid(body))
+            {
+                await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+                if (!GodotObject.IsInstanceValid(body)) break;
+
+                var mouse = viewport.GetMousePosition();
+
+                if (Input.IsMouseButtonPressed(MouseButton.Left))
+                {
+                    if (!dragging) { dragging = true; dragOff = body.GlobalPosition - mouse; }
+                    body.GlobalPosition = mouse + dragOff;
+                }
+                else { dragging = false; }
+
+                if (Input.IsMouseButtonPressed(MouseButton.WheelUp))   freeAngle -= 5f;
+                if (Input.IsMouseButtonPressed(MouseButton.WheelDown))  freeAngle += 5f;
+                if (Input.IsKeyPressed(Key.R))                          freeAngle  = 0f;
+
+                bodyAngle = freeAngle - (rootBone != null ? (float)rootBone.Call("get_rotation").AsDouble() : 0f);
+
+                body.Call("update_skeleton", 0.016);
+
+                UpdateDebugDraw(debugDraw);
+            }
+
+            if (GodotObject.IsInstanceValid(debugDraw)) debugDraw.QueueFree();
+            if (body.IsConnected("before_world_transforms_change", handler))
+                body.Disconnect("before_world_transforms_change", handler);
+            return;
+        }
+
+        BoneDebugDraw? physDebug = null;
+        if (s.ShowDebugBorder)
+        {
+            physDebug = new() { ZIndex = 200 };
+            body.GetParent().AddChild(physDebug);
+        }
 
         var   screenRect = body.GetViewportRect();
         ulong lastTick   = Time.GetTicksUsec();
@@ -207,13 +300,16 @@ public static class SpineRagdoll
                 wobbleVel[name] *= Mathf.Pow(WobbleDamp, dt * 60f);
 
                 wobbleRot[name] += wobbleVel[name] * dt;
-                wobbleRot[name] = Math.Clamp(wobbleRot[name], -120f, 120f);
+                wobbleRot[name] = Math.Clamp(wobbleRot[name], -180f, 180f);
             }
 
             // Godot 트랜스폼으로 위치 이동
             body.GlobalPosition = mainPos;
             // update_skeleton이 before_world_transforms_change 시그널 발생 → handler에서 뼈 회전 주입
             body.Call("update_skeleton", (double)dt);
+
+            if (physDebug != null && GodotObject.IsInstanceValid(physDebug))
+                UpdateDebugDraw(physDebug);
 
             // 정지 조건
             bool canStop = onFloor || s.ZeroGravity;
@@ -235,11 +331,35 @@ public static class SpineRagdoll
         if (body.IsConnected("before_world_transforms_change", handler))
             body.Disconnect("before_world_transforms_change", handler);
 
+        if (s.ShowDebugBorder) return;
+
+        if (physDebug != null && GodotObject.IsInstanceValid(physDebug)) physDebug.QueueFree();
+
         var tween = body.CreateTween().SetPauseMode(Tween.TweenPauseMode.Process);
         tween.TweenProperty(body, "modulate:a", 0f, 0.5f);
         tween.TweenCallback(Callable.From(() =>
         {
             if (GodotObject.IsInstanceValid(body)) body.QueueFree();
         }));
+    }
+
+}
+
+public sealed partial class BoneDebugDraw : Node2D
+{
+    public readonly List<(Vector2 from, Vector2 to)> Lines = [];
+    public readonly List<(Vector2 pos, string name)> Dots  = [];
+
+    public override void _Draw()
+    {
+        foreach (var (from, to) in Lines)
+            DrawLine(from, to, new Color(0f, 1f, 1f, 0.8f), 2f);
+        foreach (var (pos, name) in Dots)
+        {
+            DrawCircle(pos, 4f, Colors.Yellow);
+            if (RagdollSettings.Current.ShowBoneNames)
+                DrawString(ThemeDB.FallbackFont, pos + new Vector2(6, -4), name,
+                    fontSize: 11, modulate: Colors.White);
+        }
     }
 }
