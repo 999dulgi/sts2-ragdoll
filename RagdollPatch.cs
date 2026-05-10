@@ -72,7 +72,6 @@ public static class RagdollPatch
 
     public static void Prefix(NCreature __instance)
     {
-        if (__instance.Entity.IsPlayer) return;
         var customConfig = RagdollConfigs.Get(__instance.Entity.ModelId.Entry);
         if (customConfig?.RagdollMode == RagdollMode.Explode)
             RagdollPreloader.CaptureNow(__instance);
@@ -90,7 +89,6 @@ public static class RagdollPatch
 
     public static void Postfix(NCreature __instance)
     {
-        if (__instance.Entity.IsPlayer) return;
         var id = __instance.Entity.ModelId.Entry;
         var customConfig = RagdollConfigs.Get(id);
         int overDamage = 0;
@@ -130,7 +128,9 @@ public static class RagdollPatch
         ragdollNode.GlobalPosition = body.GlobalPosition;
 
         float floorY = __instance.Visuals.Bounds.GlobalPosition.Y + __instance.Visuals.Bounds.Size.Y;
-        SpineRagdoll.Start(ragdollNode, floorY, overDamage, origSkin, currentAnimName);
+        SpineRagdoll.Start(ragdollNode, floorY, overDamage, origSkin, currentAnimName, keepCorpse: __instance.Entity.IsPlayer);
+        if (__instance.Entity.IsPlayer)
+            RagdollExplosion.SpawnPlayerRelics(__instance);
         OverkillPatch.overkillDict.Remove(id);
     }
 }
@@ -140,8 +140,6 @@ public static class RevivePatch
 {
     public static void Prefix(NCreature __instance)
     {
-        if (__instance.Entity.IsPlayer) return;
-
         var body = __instance.Body;
         body.Visible = true;
         body.Modulate = Colors.White;

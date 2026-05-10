@@ -1,6 +1,6 @@
 # Ragdoll
 
-Enemies explode into flying parts when they die.
+Add ragdoll physics to enemy!
 
 ![manifest](./mod_manifest.webp)
 
@@ -45,3 +45,37 @@ Controls the flying sprite parts for enemies configured to use Explosion mode.
 | **Direction Degree** | Base launch angle in degrees. Same coordinate system as Spine Ragdoll direction. |
 | **Spread Degree** | Random spread applied around the direction. Each part picks its own random angle within the spread. |
 | **Angular Speed** | Rotational velocity of each part. Negative values spin in the opposite direction. |
+
+## Build
+
+### Prerequisites
+
+- [Godot 4.5.1 .NET](https://godotengine.org/download/)
+- [.NET 9 SDK](https://dotnet.microsoft.com/download)
+- Slay the Spire 2 installed via Steam
+
+### Setup
+
+The project references `sts2.dll` at the default Steam install path:
+
+```text
+C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64\sts2.dll
+```
+
+If your game is installed elsewhere, update the `HintPath` in [ragdoll.csproj](ragdoll.csproj).
+
+### Building
+
+Open the project in Godot and use **Project → Build** (or press `Alt+B`), or run from the terminal:
+
+```sh
+dotnet build ragdoll.csproj
+```
+
+After a successful build, the DLL is automatically copied to:
+
+```text
+C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\mods\ragdoll\
+```
+
+---

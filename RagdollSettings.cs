@@ -27,7 +27,7 @@ public static class RagdollSettings
         public float ExplodeAngularSpeed { get; set; } = 40f;
         public float RagdollGravity { get; set; } = 2500f;
         public float RagdollSpeed { get; set; } = 600f;
-        public float RagdollAngleDirectionDeg { get; set; } = 45f;
+        public float RagdollAngleDirectionDeg { get; set; } = 315f;
         public float RagdollAngleSpreadDeg { get; set; } = 20f;
         public float RagdollAngularSpeed { get; set; } = -10f;
         public Boolean ZeroGravity { get; set; } = false;

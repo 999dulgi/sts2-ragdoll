@@ -10,19 +10,20 @@ public static class SpineRagdoll
     private const float BounceDamp      = 0.4f;
     private const float Friction        = 0.85f;
     private const float BodyDamp        = 0.972f;
-    private const float WobbleDamp      = 0.91f;
-    private const float SpringK         = 0.01f;
+    private const float WobbleDamp      = 0.95f;
+    private const float SpringK         = 0f;
     private const float MaxTime    = 2f;
     private const float StopVelSq  = 1f;
     private const float StopAngDeg = 0.5f;
 
-    public static async void Start(Node2D body, float floorY, int overDamage = 0, GodotObject? skin = null, string? animName = null)
+    public static async void Start(Node2D body, float floorY, int overDamage = 0, GodotObject? skin = null, string? animName = null, bool keepCorpse = false)
     {
         var s   = RagdollSettings.Current;
         var rng = new Random();
 
         var mainPos  = body.GlobalPosition;
         float angleRad = Mathf.DegToRad(s.RagdollAngleDirectionDeg + (float)(rng.NextDouble() * s.RagdollAngleSpreadDeg - s.RagdollAngleSpreadDeg / 2f));
+        if (keepCorpse) angleRad = Mathf.Pi - angleRad;
         var dir      = new Vector2(Mathf.Cos(angleRad), Mathf.Sin(angleRad));
         float speed  = (float)(rng.NextDouble() * s.RagdollSpeed * 0.6f + s.RagdollSpeed + overDamage * 30f);
         var mainPrev = mainPos - dir * speed * 0.016f;
@@ -249,6 +250,8 @@ public static class SpineRagdoll
 
         if (body.IsConnected("before_world_transforms_change", handler))
             body.Disconnect("before_world_transforms_change", handler);
+
+        if (keepCorpse) return;
 
         var tween = body.CreateTween().SetPauseMode(Tween.TweenPauseMode.Process);
         tween.TweenProperty(body, "modulate:a", 0f, 0.5f);

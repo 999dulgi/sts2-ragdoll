@@ -186,6 +186,44 @@ public static class RagdollExplosion
     private const float Friction         = 0.85f;
     private const float StopVelThreshold = 30f;
 
+    public static void SpawnPlayerRelics(NCreature creature)
+    {
+        var player = creature.Entity.Player;
+        if (player == null) return;
+
+        var relics = player.Relics;
+        if (relics.Count == 0) return;
+
+        var spawnPos   = creature.Visuals.GlobalPosition;
+        var boundsNode = creature.Visuals.Bounds;
+        float floorY   = boundsNode.GlobalPosition.Y + boundsNode.Size.Y;
+        var partParent = RagdollPatch.CombatContainer ?? creature.GetTree().CurrentScene;
+
+        foreach (var relic in relics)
+        {
+            var icon = relic.Icon;
+            if (icon == null) continue;
+            SpawnIcon(partParent, icon, spawnPos, floorY);
+        }
+    }
+
+    private static void SpawnIcon(Node parent, Texture2D icon, Vector2 spawnPos, float floorY)
+    {
+        var node   = new Node2D { ProcessMode = Node.ProcessModeEnum.Always };
+        var sprite = new Sprite2D { Texture = icon };
+        node.AddChild(sprite);
+        parent.AddChild(node);
+        node.GlobalPosition = spawnPos;
+
+        var s      = RagdollSettings.Current;
+        float angle = Mathf.DegToRad(s.ExplodeAngleDirectionDeg + (float)(_rng.NextDouble() * s.ExplodeAngleSpreadDeg - s.ExplodeAngleSpreadDeg / 2f));
+        float speed = (float)(_rng.NextDouble() * s.ExplodeSpeed * 0.6f + s.ExplodeSpeed);
+        var velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * speed;
+        float angVel = (float)(_rng.NextDouble() * s.ExplodeAngularSpeed * 2 - s.ExplodeAngularSpeed);
+
+        Simulate(node, sprite, velocity, angVel, floorY, keepCorpse: true);
+    }
+
     private static void SpawnPart(Node parent, Texture2D texture, AtlasRegion region, Vector2 spawnPos, float scale, float floorY, int overDamage, Rect2? subAtlasRect = null, Action<Node2D, Sprite2D>? effect = null, Action<Node2D, Sprite2D>? finishEffect = null)
     {
         var node = new Node2D();
@@ -231,7 +269,7 @@ public static class RagdollExplosion
         Simulate(node, sprite, velocity, angVel, floorY, finishEffect);
     }
 
-    private static async void Simulate(Node2D node, Sprite2D sprite, Vector2 velocity, float angVel, float floorY, Action<Node2D, Sprite2D>? onFinish = null)
+    private static async void Simulate(Node2D node, Sprite2D sprite, Vector2 velocity, float angVel, float floorY, Action<Node2D, Sprite2D>? onFinish = null, bool keepCorpse = false)
     {
         ulong lastTick = Time.GetTicksUsec();
         ulong startTick = lastTick;
@@ -279,6 +317,8 @@ public static class RagdollExplosion
         if (!GodotObject.IsInstanceValid(node)) return;
 
         onFinish?.Invoke(node, sprite);
+
+        if (keepCorpse) return;
 
         var tween = node.CreateTween().SetPauseMode(Tween.TweenPauseMode.Process);
         tween.TweenProperty(sprite, "modulate:a", 0f, 0.3f);
