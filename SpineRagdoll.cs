@@ -10,7 +10,7 @@ public static class SpineRagdoll
     private const float BounceDamp      = 0.4f;
     private const float Friction        = 0.85f;
     private const float BodyDamp        = 0.972f;
-    private const float WobbleDamp      = 0.95f;
+    private const float WobbleDamp      = 0.87f;
     private const float SpringK         = 0f;
     private const float MaxTime    = 2f;
     private const float StopVelSq  = 1f;
@@ -222,6 +222,7 @@ public static class SpineRagdoll
 
                 wobbleVel[name] -= wobbleRot[name] * SpringK * df * dt;
                 wobbleVel[name] *= Mathf.Pow(WobbleDamp, dt * 60f);
+                wobbleVel[name] = Math.Clamp(wobbleVel[name], -270f, 270f);
 
                 wobbleRot[name] += wobbleVel[name] * dt;
             }

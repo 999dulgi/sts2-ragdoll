@@ -11,7 +11,9 @@ using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Screens.ModdingScreen;
+using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
+using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.ValueProps;
 
@@ -89,6 +91,10 @@ public static class RagdollPatch
 
     public static void Postfix(NCreature __instance)
     {
+        if (LocalContext.IsMe(__instance.Entity) &&
+            RunManager.Instance.DebugOnlyGetState()?.CurrentRoom?.IsVictoryRoom == true)
+            return;
+
         var id = __instance.Entity.ModelId.Entry;
         var customConfig = RagdollConfigs.Get(id);
         int overDamage = 0;
@@ -119,17 +125,17 @@ public static class RagdollPatch
 
         var ragdollNode = (Node2D)ClassDB.Instantiate(body.GetClass());
         ragdollNode.Set("skeleton_data_res", skelDataRes);
-        ragdollNode.Scale = body.Scale;
         ragdollNode.ZIndex = body.ZIndex;
         ragdollNode.ProcessMode = Node.ProcessModeEnum.Always;
 
         var partParent = (Node?)CombatContainer ?? body.GetTree().CurrentScene;
         partParent.AddChild(ragdollNode);
-        ragdollNode.GlobalPosition = body.GlobalPosition;
+        ragdollNode.GlobalTransform = body.GlobalTransform;
 
         float floorY = __instance.Visuals.Bounds.GlobalPosition.Y + __instance.Visuals.Bounds.Size.Y;
-        SpineRagdoll.Start(ragdollNode, floorY, overDamage, origSkin, currentAnimName, keepCorpse: __instance.Entity.IsPlayer);
-        if (__instance.Entity.IsPlayer)
+        bool isMe = LocalContext.IsMe(__instance.Entity);
+        SpineRagdoll.Start(ragdollNode, floorY, overDamage, origSkin, currentAnimName, keepCorpse: isMe);
+        if (isMe)
             RagdollExplosion.SpawnPlayerRelics(__instance);
         OverkillPatch.overkillDict.Remove(id);
     }
