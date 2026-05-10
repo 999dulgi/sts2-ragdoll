@@ -8,9 +8,8 @@ public static class SpineRagdoll
 {
     private const float AirDamp         = 0.99f;
     private const float BounceDamp      = 0.4f;
-    private const float Friction        = 0.85f;
     private const float BodyDamp        = 0.972f;
-    private const float WobbleDamp      = 0.87f;
+    private const float WobbleDamp      = 0.95f;
     private const float SpringK         = 0f;
     private const float MaxTime    = 2f;
     private const float StopVelSq  = 1f;
@@ -150,7 +149,6 @@ public static class SpineRagdoll
         var   screenRect = body.GetViewportRect();
         ulong lastTick   = Time.GetTicksUsec();
         float elapsed    = 0f;
-        bool  onFloor    = false;
 
         while (elapsed < MaxTime && GodotObject.IsInstanceValid(body))
         {
@@ -175,20 +173,12 @@ public static class SpineRagdoll
             bodyAngVel *= Mathf.Pow(BodyDamp, dt * 60f);
             bodyAngle   = bodyAngVel * dt * 60f;
 
-            // 바닥 충돌
-            bool justLanded = false;
+            // 바닥 클램프
             if (mainPos.Y > floorY)
             {
-                float vx = mainPos.X - mainPrev.X;
-                float vy = mainPos.Y - mainPrev.Y;
                 mainPos.Y  = floorY;
-                mainPrev.Y = floorY + vy * BounceDamp;
-                mainPrev.X = mainPos.X - vx * Friction;
-                if (!onFloor) { justLanded = true; onFloor = true; bodyAngVel *= 0.4f; }
+                mainPrev.Y = floorY;
             }
-            else { onFloor = false; }
-
-            if (onFloor) bodyAngVel *= Mathf.Pow(0.80f, dt * 60f);
 
             // 좌우 벽 충돌
             if (mainPos.X < screenRect.Position.X || mainPos.X > screenRect.End.X)
@@ -217,9 +207,6 @@ public static class SpineRagdoll
                 wobbleVel[name] -= accel.X * df * 3.0f;
                 wobbleVel[name] -= accel.Y * df * 1.5f;
 
-                if (justLanded)
-                    wobbleVel[name] += (float)(rng.NextDouble() * s.RagdollAngularSpeed * 80f - s.RagdollAngularSpeed * 40f) * df;
-
                 wobbleVel[name] -= wobbleRot[name] * SpringK * df * dt;
                 wobbleVel[name] *= Mathf.Pow(WobbleDamp, dt * 60f);
                 wobbleVel[name] = Math.Clamp(wobbleVel[name], -270f, 270f);
@@ -230,10 +217,10 @@ public static class SpineRagdoll
             // Godot 트랜스폼으로 위치 이동
             body.GlobalPosition = mainPos;
             // update_skeleton이 before_world_transforms_change 시그널 발생 → handler에서 뼈 회전 주입
-            body.Call("update_skeleton", (double)dt);
+            body.Call("update_skeleton", 0.0);
 
             // 정지 조건
-            bool canStop = onFloor || s.ZeroGravity;
+            bool canStop = s.ZeroGravity;
             if (canStop)
             {
                 var curVel = mainPos - mainPrev;
