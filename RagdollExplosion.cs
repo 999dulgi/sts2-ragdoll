@@ -121,7 +121,7 @@ public static class RagdollExplosion
 
                 foreach (var (pos, size) in subRects)
                 {
-                    if (!inSeparate && (size.X < minSize || size.Y < minSize)) continue;
+                    if (RagdollSettings.Current.SmallPartExplosionExclude && !inSeparate && (size.X < minSize || size.Y < minSize)) continue;
 
                     Rect2 subAtlasRect;
                     subAtlasRect = new Rect2(

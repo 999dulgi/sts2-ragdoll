@@ -9,9 +9,9 @@ public static class SpineRagdoll
     private const float AirDamp         = 0.99f;
     private const float BounceDamp      = 0.4f;
     private const float BodyDamp        = 0.972f;
-    private const float WobbleDamp      = 0.95f;
-    private const float SpringK         = 0f;
-    private const float MaxTime    = 2f;
+    private const float WobbleDamp      = 0.98f;
+    private const float SpringK         = 0.1f;
+    private const float MaxTime    = 3f;
     private const float StopVelSq  = 1f;
     private const float StopAngDeg = 0.5f;
 
@@ -46,6 +46,7 @@ public static class SpineRagdoll
             skeleton.Call("set_skin", skin);
             skeleton.Call("set_slots_to_setup_pose");
         }
+
 
         var boneObjects = new Dictionary<string, GodotObject>();
         foreach (var v in skeleton.Call("get_bones").AsGodotArray())
@@ -103,9 +104,10 @@ public static class SpineRagdoll
         foreach (var (name, _) in boneObjects)
         {
             if (name == rootBoneName) continue;
-            wobbleRot[name] = dir.X * 10f;
-            wobbleVel[name] = dir.X * s.RagdollAngularSpeed * 1.5f
-                            + (float)(rng.NextDouble() * s.RagdollAngularSpeed * 0.4f - s.RagdollAngularSpeed * 0.2f);
+            float depthScale = 1f + boneDepth.GetValueOrDefault(name, 0) * 0.3f;
+            wobbleRot[name] = (dir.X * 12f + dir.Y * 6f) * depthScale;
+            wobbleVel[name] = (dir.X * 2.5f + dir.Y * 1.2f) * s.RagdollAngularSpeed * depthScale
+                            + (float)(rng.NextDouble() * s.RagdollAngularSpeed * 0.8f - s.RagdollAngularSpeed * 0.4f);
         }
 
         float bodyAngVel = dir.X * s.RagdollAngularSpeed * 3f
@@ -119,9 +121,27 @@ public static class SpineRagdoll
         }
         body.Call("update_skeleton", 0.016);
 
-        var baseRot = new Dictionary<string, float>();
+        var baseRot    = new Dictionary<string, float>();
+        var currentRot = new Dictionary<string, float>();
         foreach (var (name, bone) in boneObjects)
-            baseRot[name] = (float)bone.Call("get_rotation").AsDouble();
+        {
+            float r = (float)bone.Call("get_rotation").AsDouble();
+            baseRot[name]    = r;
+            currentRot[name] = r;
+        }
+
+        // 애니메이션 트랙 제거 → apply()가 매 프레임 뼈/constraint를 덮어쓰는 것 차단
+        // constraint mix도 한 번만 0으로 설정하면 animation이 리셋하지 않음
+        try
+        {
+            var animStateForClear = body.Call("get_animation_state").AsGodotObject();
+            animStateForClear?.Call("clear_tracks");
+            foreach (var v in skeleton.Call("get_ik_constraints").AsGodotArray())
+                v.AsGodotObject()?.Call("set_mix", 0.0);
+            foreach (var v in skeleton.Call("get_transform_constraints").AsGodotArray())
+                v.AsGodotObject()?.Call("set_mix", 0.0);
+        }
+        catch { }
 
         float bodyAngle  = 0f;
         bool  inHandler  = false;
@@ -139,9 +159,21 @@ public static class SpineRagdoll
             foreach (var (name, bone) in boneObjects)
             {
                 if (name == rootBoneName || !wobbleRot.TryGetValue(name, out var wob)) continue;
-                bone.Call("set_rotation", (double)(baseRot[name] + wob));
-            }
 
+                float target = baseRot[name] + wob;
+
+                // 부모 wob의 40%를 자식에게 전달 → 채찍 연쇄 효과
+                if (boneParents.TryGetValue(name, out var parentName) && wobbleRot.TryGetValue(parentName, out var parentWob))
+                    target += parentWob * 0.4f;
+
+                // 하위 뼈일수록 느리게 따라옴 → lag 효과
+                int   depth       = boneDepth.GetValueOrDefault(name, 0);
+                float followSpeed = Mathf.Clamp(1.0f - depth * 0.15f, 0.3f, 1.0f);
+                currentRot[name]  = Mathf.Lerp(currentRot[name], target, followSpeed);
+
+                bone.Call("set_rotation", (double)currentRot[name]);
+            }
+            
             inHandler = false;
         });
         body.Connect("before_world_transforms_change", handler);
@@ -149,6 +181,7 @@ public static class SpineRagdoll
         var   screenRect = body.GetViewportRect();
         ulong lastTick   = Time.GetTicksUsec();
         float elapsed    = 0f;
+        var   smoothAccel = Vector2.Zero;
 
         while (elapsed < MaxTime && GodotObject.IsInstanceValid(body))
         {
@@ -167,7 +200,8 @@ public static class SpineRagdoll
             mainPos += vel + gravity * dt * dt;
 
             var accel = vel - prevVelVec;
-            prevVelVec = vel;
+            prevVelVec  = vel;
+            smoothAccel = accel.Lerp(smoothAccel, 0.6f);
 
             // 텀블링
             bodyAngVel *= Mathf.Pow(BodyDamp, dt * 60f);
@@ -204,12 +238,12 @@ public static class SpineRagdoll
                 int   depth = boneDepth.GetValueOrDefault(name, 1);
                 float df    = Mathf.Clamp(0.3f + depth / 3f, 0.3f, 2f);
 
-                wobbleVel[name] -= accel.X * df * 3.0f;
-                wobbleVel[name] -= accel.Y * df * 1.5f;
+                wobbleVel[name] -= smoothAccel.X * df * 5.0f;
+                wobbleVel[name] -= smoothAccel.Y * df * 3.0f;
+                wobbleVel[name] -= bodyAngVel * df * 4.0f * dt;
 
                 wobbleVel[name] -= wobbleRot[name] * SpringK * df * dt;
                 wobbleVel[name] *= Mathf.Pow(WobbleDamp, dt * 60f);
-                wobbleVel[name] = Math.Clamp(wobbleVel[name], -270f, 270f);
 
                 wobbleRot[name] += wobbleVel[name] * dt;
             }
@@ -217,7 +251,7 @@ public static class SpineRagdoll
             // Godot 트랜스폼으로 위치 이동
             body.GlobalPosition = mainPos;
             // update_skeleton이 before_world_transforms_change 시그널 발생 → handler에서 뼈 회전 주입
-            body.Call("update_skeleton", 0.0);
+            body.Call("update_skeleton", (double)dt);
 
             // 정지 조건
             bool canStop = s.ZeroGravity;
