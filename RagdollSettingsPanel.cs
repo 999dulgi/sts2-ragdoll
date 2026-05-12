@@ -17,12 +17,15 @@ public static class RagdollSettingsPanel
         layer.ProcessMode = Node.ProcessModeEnum.Always;
         parent.AddChild(layer);
 
-        _panel = new PanelContainer();
-        _panel.CustomMinimumSize = new Vector2(360, 0);
-        _panel.GlobalPosition = new Vector2(_panel.GetViewportRect().Size.X / 2, _panel.GetViewportRect().Size.Y / 2);
-        _panel.Visible = false;
-        _panel.ProcessMode = Node.ProcessModeEnum.Always;
+        _panel = new PanelContainer
+        {
+            CustomMinimumSize = new Vector2(360, 0),
+            Visible = false,
+            ProcessMode = Node.ProcessModeEnum.Always
+        };
         layer.AddChild(_panel);
+        var viewport = _panel.GetViewportRect();
+        _panel.GlobalPosition = new Vector2(viewport.Size.X / 2, viewport.Size.Y / 2);
         _panel.GuiInput += (InputEvent @event) =>
         {
             if (@event is InputEventMouseButton mouseButton && mouseButton.ButtonIndex == MouseButton.Left)
@@ -86,6 +89,7 @@ public static class RagdollSettingsPanel
         AddSlider(explosion, "Direction Degree",  s.ExplodeAngleDirectionDeg,   0f,   360f, v => s.ExplodeAngleDirectionDeg = v);
         AddSlider(explosion, "Spread Degree",  s.RagdollAngleSpreadDeg,   0f,   360f, v => s.RagdollAngleSpreadDeg = v);
         AddSlider(explosion, "Angular Speed", s.ExplodeAngularSpeed,   -60f,    60f, v => s.ExplodeAngularSpeed   = v);
+        AddToggle(explosion, "Exclude Small Part when Explode", s.SmallPartExplosionExclude, v => s.SmallPartExplosionExclude = v);
         
 
         var closeBtn = new Button();

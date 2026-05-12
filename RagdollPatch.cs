@@ -16,6 +16,7 @@ using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.ValueProps;
+using System.ComponentModel;
 
 [ModInitializer("ModInit")]
 public static class ModStart
@@ -53,15 +54,23 @@ public static class ModInfoFillPatch
 
     public static void Postfix(NModInfoContainer __instance, Mod mod)
     {
-        if (mod.manifest?.id != "ragdoll") return;
-
-        if (__instance.FindChild(SettingsBtnName, owned: false) != null) return;
+        if (mod.manifest?.id != "ragdoll")
+        {
+            var oldBtn = __instance.FindChild(SettingsBtnName, owned: false);
+            if (oldBtn != null)
+            {
+                __instance.RemoveChild(oldBtn);
+            }
+            return;
+        }
 
         var btn = new Button();
         btn.Name = SettingsBtnName;
         btn.Text = "Ragdoll Settings";
         btn.Pressed += RagdollSettingsPanel.Toggle;
         __instance.AddChild(btn);
+        if (__instance.FindChild("ModDescription", owned: false) is Control description)
+            btn.SetPosition(description.Position + new Vector2(0, description.Size.Y - 200));
     }
 }
 

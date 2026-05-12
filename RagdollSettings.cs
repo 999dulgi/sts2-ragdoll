@@ -33,6 +33,7 @@ public static class RagdollSettings
         public Boolean ZeroGravity { get; set; } = false;
         public Boolean ForcedExplosionMode { get; set; } = false;
         public Boolean OverkillForce { get; set; } = false;
+        public Boolean SmallPartExplosionExclude { get; set; } = true;
     }
 
     public static Data Current { get; private set; } = new();
