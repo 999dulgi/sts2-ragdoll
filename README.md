@@ -45,6 +45,7 @@ Controls the flying sprite parts for enemies configured to use Explosion mode.
 | **Direction Degree** | Base launch angle in degrees. Same coordinate system as Spine Ragdoll direction. |
 | **Spread Degree** | Random spread applied around the direction. Each part picks its own random angle within the spread. |
 | **Angular Speed** | Rotational velocity of each part. Negative values spin in the opposite direction. |
+| **Exclude Small Part when Explode** | Excludes small sprite parts from the explosion. Reduces visual clutter from tiny fragments. |
 
 ## Build
 
