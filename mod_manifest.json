@@ -1,9 +1,9 @@
 {
   "id": "ragdoll",
-  "name": "Ragdoll",
+  "name": "Ragdoll Physics",
   "author": "999dulgi",
-  "description": "Enemies fly away with ragdoll-like effect on death",
-  "version": "1.0.1",
+  "description": "Add ragdoll physics on Slay the Spire 2 Enemies and Allies. Enjoy!",
+  "version": "1.0.0",
   "has_pck": false,
   "has_dll": true,
   "affects_gameplay": false
