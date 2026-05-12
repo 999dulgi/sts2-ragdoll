@@ -100,6 +100,8 @@ public static class RagdollPatch
 
     public static void Postfix(NCreature __instance)
     {
+        if (RagdollSettings.Current.ExcludeAllies && __instance.Entity.IsPlayer) return;
+
         if (LocalContext.IsMe(__instance.Entity) &&
             RunManager.Instance.DebugOnlyGetState()?.CurrentRoom?.IsVictoryRoom == true)
             return;

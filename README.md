@@ -15,6 +15,7 @@ Click the **Ragdoll Settings** button on the mod's info screen to open the setti
 | Setting | Description |
 | --- | --- |
 | **Zero Gravity** | Disables gravity. Bodies and parts float freely and bounce off screen boundaries instead of falling. |
+| **Exclude Allies** | Skips ragdoll and explosion effects for allied characters (player and ally creatures). |
 | **Forced Explosion Mode** | Forces all enemies to use Explosion mode regardless of their individual configuration. |
 | **Overkill Force** | Applies extra launch force based on how much overkill damage was dealt. |
 

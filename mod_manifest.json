@@ -3,7 +3,7 @@
   "name": "Ragdoll Physics",
   "author": "999dulgi",
   "description": "Add ragdoll physics on Slay the Spire 2 Enemies and Allies. Enjoy!",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "has_pck": false,
   "has_dll": true,
   "affects_gameplay": false

@@ -65,6 +65,7 @@ public static class RagdollSettingsPanel
         tabs.AddChild(general);
 
         AddToggle(general, "Zero Gravity",  s.ZeroGravity, v => s.ZeroGravity = v);
+        AddToggle(general, "Exclude Allies", s.ExcludeAllies, v => s.ExcludeAllies = v);
         AddToggle(general, "Forced Explosion Mode", s.ForcedExplosionMode, v => s.ForcedExplosionMode = v);
         AddToggle(general, "Overkill Force", s.OverkillForce, v => s.OverkillForce = v);
 
