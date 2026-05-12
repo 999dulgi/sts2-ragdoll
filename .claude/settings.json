@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(grep -r \"CombatManager\" \"C:\\\\Users\\\\rlawh\\\\sts2Decompile\" -l 2>/dev/null | head -10)",
-      "Read(//c/Users/rlawh/sts2Decompile/**)"
-    ]
-  }
-}
